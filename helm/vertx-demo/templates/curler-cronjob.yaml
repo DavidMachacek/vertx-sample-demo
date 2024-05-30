@@ -1,0 +1,25 @@
+{{- if .Values.curler.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "vertx-demo.name" . }}-stalker
+spec:
+  schedule: {{ .Values.stalker.cronSchedule | default "* * * * *" | quote }}
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: {{ include "vertx-demo.name" . }}-curler
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}-curler"
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: VERTX_URL
+              value: "{{ include "vertx-demo.fullname" . }}:{{ .Values.service.port }}"
+{{- end }}

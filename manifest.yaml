@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vertx-demo
+  namespace: teastore
+  labels:
+    app: vertx-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vertx-demo
+  template:
+    metadata:
+      labels:
+        app: vertx-demo
+    spec:
+      containers:
+        - name: vertx-demo
+          image: 10.10.11.109:8082/david-machacek/vertx-demo:latest
+          ports:
+            - containerPort: 8088
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vertx-demo
+  namespace: teastore
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8088
+  selector:
+    app: vertx-demo
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: vertx-demo
+  namespace: teastore
+spec:
+  host: vertx-demo-teastore.apps.lab.ocp.lan
+  port:
+    targetPort: 8088
+  to:
+    kind: Service
+    name: vertx-demo
+    weight: 100

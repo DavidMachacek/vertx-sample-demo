@@ -1,0 +1,109 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- master
+- feature/*
+- fix/*
+
+pool:
+  name: Lab
+
+# Not the same as environment variables (accessed with different brackets for runtime vs compile time)
+variables:
+- name: CONTAINER_REPOSITORY
+  value: david-machacek
+- name: APP_NAME
+  value: vertx-demo
+- name: CONTAINER_REGISTRY_HOST
+  value: 10.10.11.109:8082
+- name: OCP_API_HOST
+  value: https://api.lab.ocp.lan:6443
+- name: TAG
+  value: '$(Build.BuildNumber)'
+- name: NAMESPACE
+  value: cicd
+- group: nexus
+- group: ocp-lab
+
+stages:
+- stage: Build
+  displayName: Build stage
+  jobs:
+  # Each job is separate machine
+  - job: MavenPackageAndPublishArtifacts
+    displayName: App - Build&Push
+    pool:
+      name: Lab
+
+    steps:
+    - task: Maven@4
+      displayName: Build JAR
+      inputs:
+        displayName: 'Maven Package'
+        mavenPomFile: 'pom.xml'
+        goals: 'clean verify'
+        options: '-DskipTests'
+        publishJUnitResults: true
+        javaHomeOption: 'JDKVersion'
+        mavenVersionOption: 'Default'
+        mavenAuthenticateFeed: false
+        effectivePomSkip: false
+        sonarQubeRunAnalysis: false
+      
+    - task: Bash@3
+      displayName: Container - Build&Push
+      env:
+        IMAGE_NAME: $(CONTAINER_REGISTRY_HOST)/$(CONTAINER_REPOSITORY)/$(APP_NAME):$(TAG)
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo 'Attempt to login to container registry'
+          podman login -u $(NEXUS_USERNAME) -p $(NEXUS_PASSWORD) https://$(CONTAINER_REGISTRY_HOST)/$(CONTAINER_REPOSITORY) --tls-verify=false
+          echo 'Start building image'
+          podman build \
+              -t $IMAGE_NAME \
+              --env BUILD_NUMBER=$(Build.BuildNumber) \
+              --label "build-number=$(Build.BuildNumber)" \
+              --label "git-commit=$(Build.SourceVersion)" \
+              --label "build-author=$(Build.RequestedFor) ($(Build.RequestedForEmail))" \
+              --label "build-branch=$(Build.SourceBranch)" .
+          echo 'Push image to container registry'
+          podman push  $IMAGE_NAME --tls-verify=false    
+
+    - task: Bash@3
+      displayName: ContainerInit - Build&Push
+      env:
+        IMAGE_NAME: $(CONTAINER_REGISTRY_HOST)/$(CONTAINER_REPOSITORY)/$(APP_NAME):$(TAG)-init
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo 'Attempt to login to container registry'
+          podman login -u $(NEXUS_USERNAME) -p $(NEXUS_PASSWORD) https://$(CONTAINER_REGISTRY_HOST)/$(CONTAINER_REPOSITORY) --tls-verify=false
+          echo 'Start building image'
+          podman build \
+              -t $IMAGE_NAME \
+              --env BUILD_NUMBER=$(Build.BuildNumber) \
+              --label "build-number=$(Build.BuildNumber)" \
+              --label "git-commit=$(Build.SourceVersion)" \
+              --label "build-author=$(Build.RequestedFor) ($(Build.RequestedForEmail))" \
+              --label "build-branch=$(Build.SourceBranch)" -f ContainerfileInit
+          echo 'Push image to container registry'
+          podman push  $IMAGE_NAME --tls-verify=false
+
+    - task: Bash@3
+      displayName: Run in OCP
+      env:
+        IMAGE_NAME: $(CONTAINER_REGISTRY_HOST)/$(CONTAINER_REPOSITORY)/$(APP_NAME):$(TAG)
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo 'Attempt to login to OCP'
+          oc login ${OCP_API_HOST} -u $(OCP_USERNAME) -p $(OCP_PASSWORD) --insecure-skip-tls-verify
+          echo 'Delete old deployment'
+          oc delete deployment vertx-demo -n teastore
+          echo 'Run in OCP'
+          helm upgrade --install vertx-demo helm/vertx-demo -n ${NAMESPACE} --set image.tag=${TAG} --set image.repository=$(CONTAINER_REGISTRY_HOST)/$(CONTAINER_REPOSITORY)/$(APP_NAME)
+
